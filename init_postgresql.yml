@@ -1,0 +1,9 @@
+---
+- name: Initialize the database cluster
+  ignore_errors: yes
+  sudo_user: postgres
+  command: /usr/pgsql-9.4/bin/initdb --encoding=UTF8 --no-locale /var/lib/pgsql/9.4/data
+
+- name: Start PostgreSQL and enable on boot
+  service: name=postgresql-9.4 state=started enabled=yes
+

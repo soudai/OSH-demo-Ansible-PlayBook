@@ -1,0 +1,108 @@
+- hosts: pg-servers
+  sudo: yes
+  tasks:
+      
+    - name: Upgrade all packages
+      yum: name=* state=latest
+        
+    - name: Download the PostgreSQL repository
+      yum: name=http://yum.postgresql.org/9.4/redhat/rhel-6-x86_64/pgdg-centos94-9.4-1.noarch.rpm state=present
+  
+    - name: Install the PostgreSQL packages and dependencies
+      yum: name={{ item }} state=present
+      with_items:
+        - postgresql94
+        - postgresql94-libs
+        - postgresql94-contrib
+        - postgresql94-server
+        - python-psycopg2
+        - python-setuptools
+
+    - name: No Password Login Postgres
+      shell: "echo '%vagrant ALL = (postgres) NOPASSWD: ALL' >> /etc/sudoers"
+    
+
+- hosts: master
+  vars:
+    postgresql_data_path: "/var/lib/pgsql/9.4/data"
+    postgresql_service_user: "postgres"
+    postgresql_service_group: "postgres"
+  sudo: yes
+  tasks:
+
+    - include: init_postgresql.yml
+
+    - name: template postgresql.conf
+      template:
+        src: template/postgresql.conf
+        dest: "{{ postgresql_data_path }}/postgresql.conf"
+        owner: "{{ postgresql_service_user }}"
+        group: "{{ postgresql_service_group }}"
+        mode: 0640
+
+    - name: template pg_hba.conf
+      template:
+        src: template/pg_hba.conf
+        dest: "{{ postgresql_data_path }}/pg_hba.conf"
+        owner: "{{ postgresql_service_user }}"
+        group: "{{ postgresql_service_group }}"
+        mode: 0640
+
+    - name: PostgreSQL | Add Connect User
+      postgresql_user: name=demo_user password=test role_attr_flags=CREATEDB,CREATEROLE,SUPERUSER
+
+    - name: PostgreSQL | Add REPLICATION User
+      postgresql_user: name=repuser password=test role_attr_flags=REPLICATION
+
+    - name: PostgreSQL | Add Demo Database
+      sudo_user: postgres
+      shell: createdb --locale=C demo_db -O demo_user
+      ignore_errors: yes
+
+    - name: restart postgresql
+      service:
+        name: postgresql-9.4
+        state: restarted
+
+- hosts: slave
+  vars:
+    postgresql_data_path: "/var/lib/pgsql/9.4/data"
+    postgresql_service_user: "postgres"
+    postgresql_service_group: "postgres"
+  sudo: yes
+  tasks:
+    - name: PostgreSQL | Replication Stop
+      sudo_user: postgres
+      shell: /usr/pgsql-9.4/bin/pg_ctl -D /var/lib/pgsql/9.4/data/ stop
+      ignore_errors: yes
+
+    - name: template .pgpass
+      template:
+        src: template/pgpass
+        dest: "/var/lib/pgsql/.pgpass"
+        owner: "{{ postgresql_service_user }}"
+        group: "{{ postgresql_service_group }}"
+        mode: 0600
+
+    - name: PostgreSQL | Delete Data File
+      sudo_user: postgres
+      shell: rm -fr {{ postgresql_data_path }}/*
+      ignore_errors: yes
+    
+    - name: PostgreSQL | Base Backup
+      sudo_user: postgres
+      shell: pg_basebackup -h 192.168.33.11 -U repuser -D /var/lib/pgsql/9.4/data --xlog --progress
+      ignore_errors: yes
+
+    - name: template recovery.conf
+      template:
+        src: template/recovery.conf
+        dest: "{{ postgresql_data_path }}/recovery.conf"
+        owner: "{{ postgresql_service_user }}"
+        group: "{{ postgresql_service_group }}"
+        mode: 0640
+
+    - name: PostgreSQL | Replication Start
+      sudo_user: postgres
+      shell: /usr/pgsql-9.4/bin/pg_ctl -D /var/lib/pgsql/9.4/data/ start
+      ignore_errors: yes
